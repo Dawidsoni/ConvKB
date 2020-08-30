@@ -3,12 +3,15 @@ import numpy as np
 
 np.random.seed(1234)
 import os
+
 import time
 import datetime
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from builddata import *
 from model import ConvKB
 
+# OSX flags
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 # Parameters
 # ==================================================
 parser = ArgumentParser("ConvKB", formatter_class=ArgumentDefaultsHelpFormatter, conflict_handler='resolve')
@@ -50,6 +53,9 @@ data_size = len(train)
 train_batch = Batch_Loader(train, words_indexes, indexes_words, headTailSelector, \
                            entity2id, id2entity, relation2id, id2relation, batch_size=args.batch_size,
                            neg_ratio=args.neg_ratio)
+test_batch = Batch_Loader(test, words_indexes, indexes_words, headTailSelector, \
+                           entity2id, id2entity, relation2id, id2relation, batch_size=args.batch_size,
+                           neg_ratio=args.neg_ratio)
 
 entity_array = np.array(list(train_batch.indexes_ents.keys()))
 
@@ -88,11 +94,7 @@ y_test = np.array(list(test.values())).astype(np.float32)
 # Training
 # ==================================================
 with tf.Graph().as_default():
-    tf.set_random_seed(1234)
-    session_conf = tf.ConfigProto(allow_soft_placement=args.allow_soft_placement,
-                                  log_device_placement=args.log_device_placement)
-    session_conf.gpu_options.allow_growth = True
-    sess = tf.Session(config=session_conf)
+    sess = tf.Session()
     with sess.as_default():
         global_step = tf.Variable(0, name="global_step", trainable=False)
         cnn = ConvKB(
@@ -135,13 +137,35 @@ with tf.Graph().as_default():
                 cnn.dropout_keep_prob: args.dropout_keep_prob,
             }
             _, step, loss = sess.run([train_op, global_step, cnn.loss], feed_dict)
+            return loss
+
+        def test_step(x_batch, y_batch):
+            feed_dict = {
+                cnn.input_x: x_batch,
+                cnn.input_y: y_batch,
+                cnn.dropout_keep_prob: 1.0,
+            }
+            return sess.run(cnn.loss, feed_dict)
 
         num_batches_per_epoch = int((data_size - 1) / args.batch_size) + 1
+        num_test_batches_per_epoch = 10
         for epoch in range(args.num_epochs):
+            epoch_loss = 0.0
             for batch_num in range(num_batches_per_epoch):
                 x_batch, y_batch = train_batch()
-                train_step(x_batch, y_batch)
+                loss = train_step(x_batch, y_batch)
+                epoch_loss += loss
                 current_step = tf.train.global_step(sess, global_step)
+            test_epoch_loss = 0.0
+            for batch_num in range(num_test_batches_per_epoch):
+                x_batch, y_batch = test_batch()
+                loss = test_step(x_batch, y_batch)
+                test_epoch_loss += loss
+            average_epoch_loss = epoch_loss / num_batches_per_epoch
+            average_test_epoch_loss = test_epoch_loss / num_test_batches_per_epoch
+            print(f'Average training sample loss in epoch {epoch}: {average_epoch_loss}')
+            print(f'Average test sample loss in epoch {epoch}: {average_test_epoch_loss}')
+            print()
 
             if epoch > 0:
                 if epoch % args.saveStep == 0:
