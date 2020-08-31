@@ -225,7 +225,7 @@ with tf.Graph().as_default():
                 x_batch, y_batch = test_batch()
                 loss = test_step(x_batch, y_batch)
                 test_epoch_loss += loss
-            num_evals_per_epoch = 100
+            num_evals_per_epoch = 50
             head_mr, head_mrr, head_hits10 = eval_prediction(
                 x_test[num_evals_per_epoch * args.testIdx: num_evals_per_epoch * (args.testIdx + 1)],
                 y_test[num_evals_per_epoch * args.testIdx: num_evals_per_epoch * (args.testIdx + 1)],
