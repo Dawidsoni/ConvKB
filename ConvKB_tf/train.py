@@ -9,6 +9,7 @@ import datetime
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 from builddata import *
 from model import ConvKB
+from scipy.stats import rankdata
 
 # OSX flags
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
@@ -56,7 +57,9 @@ train_batch = Batch_Loader(train, words_indexes, indexes_words, headTailSelector
 test_batch = Batch_Loader(test, words_indexes, indexes_words, headTailSelector, \
                            entity2id, id2entity, relation2id, id2relation, batch_size=args.batch_size,
                            neg_ratio=args.neg_ratio)
-
+x_test = np.array(list(test.keys())).astype(np.int32)
+y_test = np.array(list(test.values())).astype(np.float32)
+len_test = len(x_test)
 entity_array = np.array(list(train_batch.indexes_ents.keys()))
 
 lstEmbed = []
@@ -147,8 +150,69 @@ with tf.Graph().as_default():
             }
             return sess.run(cnn.loss, feed_dict)
 
+        def eval_step(x_batch, y_batch):
+            feed_dict = {
+                cnn.input_x: x_batch,
+                cnn.input_y: y_batch,
+                cnn.dropout_keep_prob: 1.0,
+            }
+            scores = sess.run([cnn.predictions], feed_dict)
+            return scores
+
+
+        def eval_prediction(x_batch, y_batch, head_or_tail='head'):
+            hits10 = 0.0
+            mrr = 0.0
+            mr = 0.0
+            for i in range(len(x_batch)):
+                new_x_batch = np.tile(x_batch[i], (len(entity2id), 1))
+                new_y_batch = np.tile(y_batch[i], (len(entity2id), 1))
+                if head_or_tail == 'head':
+                    new_x_batch[:, 0] = entity_array
+                else:  # 'tail'
+                    new_x_batch[:, 2] = entity_array
+
+                lstIdx = []
+                for tmpIdxTriple in range(len(new_x_batch)):
+                    tmpTriple = (new_x_batch[tmpIdxTriple][0], new_x_batch[tmpIdxTriple][1],
+                                 new_x_batch[tmpIdxTriple][2])
+                    if (tmpTriple in train) or (tmpTriple in valid) or (
+                            tmpTriple in test):  # also remove the valid test triple
+                        lstIdx.append(tmpIdxTriple)
+                new_x_batch = np.delete(new_x_batch, lstIdx, axis=0)
+                new_y_batch = np.delete(new_y_batch, lstIdx, axis=0)
+
+                # thus, insert the valid test triple again, to the beginning of the array
+                new_x_batch = np.insert(new_x_batch, 0, x_batch[i],
+                                        axis=0)  # thus, the index of the valid test triple is equal to 0
+                new_y_batch = np.insert(new_y_batch, 0, y_batch[i], axis=0)
+
+                # while len(new_x_batch) % ((int(args.neg_ratio) + 1) * args.batch_size) != 0:
+                #    new_x_batch = np.append(new_x_batch, [x_batch[i]], axis=0)
+                #    new_y_batch = np.append(new_y_batch, [y_batch[i]], axis=0)
+
+                results = []
+                listIndexes = range(0, len(new_x_batch), (int(args.neg_ratio) + 1) * args.batch_size)
+                for tmpIndex in range(len(listIndexes) - 1):
+                    results = np.append(results, eval_step(
+                        new_x_batch[listIndexes[tmpIndex]:listIndexes[tmpIndex + 1]],
+                        new_y_batch[listIndexes[tmpIndex]:listIndexes[tmpIndex + 1]]))
+                results = np.append(results,
+                                    eval_step(new_x_batch[listIndexes[-1]:], new_y_batch[listIndexes[-1]:]))
+
+                results = np.reshape(results, -1)
+                results_with_id = rankdata(results, method='ordinal')
+                _filter = results_with_id[0]
+
+                mr += _filter
+                mrr += 1.0 / _filter
+                if _filter <= 10:
+                    hits10 += 1
+
+            return np.array([mr, mrr, hits10])
+
         num_batches_per_epoch = int((data_size - 1) / args.batch_size) + 1
-        num_test_batches_per_epoch = 10
+        num_test_batches_per_epoch = 100
         for epoch in range(args.num_epochs):
             epoch_loss = 0.0
             for batch_num in range(num_batches_per_epoch):
@@ -161,10 +225,18 @@ with tf.Graph().as_default():
                 x_batch, y_batch = test_batch()
                 loss = test_step(x_batch, y_batch)
                 test_epoch_loss += loss
+            num_evals_per_epoch = int(len_test / (args.num_splits - 1))
+            eval_prediction(
+                x_test[num_evals_per_epoch * args.testIdx: num_evals_per_epoch * (args.testIdx + 1)],
+                y_test[num_evals_per_epoch * args.testIdx: num_evals_per_epoch * (args.testIdx + 1)],
+                head_or_tail='head'
+            )
+            print("EVAL DONE")
             average_epoch_loss = epoch_loss / num_batches_per_epoch
             average_test_epoch_loss = test_epoch_loss / num_test_batches_per_epoch
             print(f'Average training sample loss in epoch {epoch}: {average_epoch_loss}')
             print(f'Average test sample loss in epoch {epoch}: {average_test_epoch_loss}')
+
             print()
 
             if epoch > 0:
