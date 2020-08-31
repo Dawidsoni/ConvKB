@@ -209,7 +209,7 @@ with tf.Graph().as_default():
                 if _filter <= 10:
                     hits10 += 1
 
-            return np.array([mr, mrr, hits10])
+            return np.array([mr / len(x_batch), mrr / len(x_batch), hits10 / len(x_batch)])
 
         num_batches_per_epoch = int((data_size - 1) / args.batch_size) + 1
         num_test_batches_per_epoch = 100
@@ -226,17 +226,24 @@ with tf.Graph().as_default():
                 loss = test_step(x_batch, y_batch)
                 test_epoch_loss += loss
             num_evals_per_epoch = 100
-            eval_prediction(
+            head_mr, head_mrr, head_hits10 = eval_prediction(
                 x_test[num_evals_per_epoch * args.testIdx: num_evals_per_epoch * (args.testIdx + 1)],
                 y_test[num_evals_per_epoch * args.testIdx: num_evals_per_epoch * (args.testIdx + 1)],
                 head_or_tail='head'
             )
-            print("EVAL DONE")
+            tail_mr, tail_mrr, tail_hits10 = eval_prediction(
+                x_test[num_evals_per_epoch * args.testIdx: num_evals_per_epoch * (args.testIdx + 1)],
+                y_test[num_evals_per_epoch * args.testIdx: num_evals_per_epoch * (args.testIdx + 1)],
+                head_or_tail='tail'
+            )
+            avg_mr, avg_mrr, avg_hits10 = np.mean([head_mr, tail_mr]), np.mean([head_mrr, tail_mrr]), np.mean([head_hits10, tail_hits10])
             average_epoch_loss = epoch_loss / num_batches_per_epoch
             average_test_epoch_loss = test_epoch_loss / num_test_batches_per_epoch
             print(f'Average training sample loss in epoch {epoch}: {average_epoch_loss}')
             print(f'Average test sample loss in epoch {epoch}: {average_test_epoch_loss}')
-
+            print('Head Raw MeanRank: {:.3f}, Head Raw MRR: {:.3f}, Hits@10: {:.3f}'.format(head_mr, head_mrr, head_hits10))
+            print('Tail Raw MeanRank: {:.3f}, Tail Raw MRR: {:.3f}, Hits@10: {:.3f}'.format(tail_mr, tail_mrr, tail_hits10))
+            print('Average Raw MeanRank: {:.3f}, Average Raw MRR: {:.3f}, Average Hits@10: {:.3f}'.format(avg_mr, avg_mrr, avg_hits10))
             print()
 
             if epoch > 0:
